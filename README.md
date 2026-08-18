@@ -219,14 +219,16 @@ sample_000,search/sample_000_search.png,reference/sample_000_ref.png,452.4,263.2
 
 Frozen Benchmark Verification
 
-'''text final_production_check.py
-'''
+```powershell
+ final_production_check.py
+```
 provides the final reproducibility check for the locked production implementation.
 
 Run:
 
-'''textpython final_production_check.py
-'''
+```powershell
+ python final_production_check.py
+```
 
 The script runs the locked matcher on the frozen 30-pair benchmark stored in dataset/ and reports:
 
@@ -241,16 +243,16 @@ This reproduces the benchmark results reported in Section 15 and verifies that t
 
 Submission Visual Generation
 
-'''text
+```powershell
 dataset_visual_generator.py 
-'''
+```
 generates the two visual examples used in the submission.
 
 Run:
 
-'''text
+```bash
 python dataset_visual_generator.py
-'''
+```
 
 The script selects:
 
@@ -666,19 +668,21 @@ RESULT: (x, y)
 
 For external scoring, run:
 
+```text
 python evaluation_script.py --reference <reference_image> --search <search_image>
-
+```
 The script performs inference without ground truth and prints:
 
 RESULT: (x, y)
 
 For benchmark validation, use:
-
+```text
 python final_production_check.py
-
+```
 For submission visualization, use:
 
+```text
 python dataset_visual_generator.py
-
+```
 
 No source-code modification or ground-truth input is required.
