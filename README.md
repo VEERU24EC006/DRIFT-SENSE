@@ -1,153 +1,547 @@
-# Drift-Sense: Navigation-Error Recovery
+# DRIFT-SENSE
 
-Localizes a periodic DRAM-style semiconductor reference pattern inside a 1000x1000 px SEM-style search image, handling the 10x scale difference, rotation, contrast/gain drift, detector noise, and periodic-lattice ambiguity that breaks naive template matching.
+## AI-Powered Navigation-Error Recovery for DRAM-Style Wafer Inspection
 
-The repo contains a synthetic dataset generator (with exact ground truth), the localization inference script, a frozen 30-pair benchmark validator, and a visual-report generator.
+## 1. Overview
 
-## Setup
+**DRIFT-SENSE** is a classical computer-vision system for recovering the location of a target semiconductor site inside a large SEM search image.
 
-Requires Python 3.10+ and only `numpy` + `opencv-python`.
+The system receives:
 
+- a **Reference Image** of `1000 × 1000` pixels
+- a **Search Image** of `1000 × 1000` pixels
+
+The reference represents the target structure at approximately **10× higher magnification** than the search image. DRIFT-SENSE resamples the reference to the search scale (roughly 0.08–0.12 of its size), searches for the corresponding structure, and returns its center coordinates:
+
+```text
+(x, y)
 ```
+
+in **Search Image pixel coordinates**.
+
+The system is designed for the **Drift-Sense: Navigation-Error Recovery** problem, where stage drift, imaging variation, rotation, scale differences, noise, charging, and other acquisition effects can cause the inspection tool to land at the wrong location. This is particularly difficult for periodic layouts such as DRAM, where an incorrect location may look extremely similar to the intended site.
+
+## 2. Key Idea
+
+A conventional template matcher can fail when the highest correlation peak belongs to another repeated structure.
+
+DRIFT-SENSE therefore uses a **coarse-to-fine, multi-hypothesis localization pipeline**:
+
+```text
+Reference + Search
+        ↓
+Scale / Rotation / Feature-Size Hypotheses
+        ↓
+Normalized Cross-Correlation (NCC)
+        ↓
+Multiple Candidate Peaks
+        ↓
+Spatial Suppression + Candidate Deduplication
+        ↓
+3×3 Regional Census Verification
+        ↓
+Final Candidate Selection
+        ↓
+Predicted Center (x, y)
+```
+
+Instead of trusting one correlation maximum, the system retains multiple candidates and verifies local structure before producing the final location.
+
+## 3. Architecture Choice
+
+The primary target architecture is:
+
+**DRAM-style periodic semiconductor layouts**
+
+The synthetic dataset and localization evaluation are designed around repeated memory-like structures where periodic ambiguity is a major challenge. The generator models word lines, bit lines, and contact/via patterns at every intersection, with the lattice pitch preserved while critical dimensions vary.
+
+## 4. Dataset Generation
+
+The repository contains a standalone synthetic SEM dataset generator.
+
+Generated pairs consist of:
+
+```text
+Reference: 1000 × 1000
+Search:    1000 × 1000
+```
+
+Each generated sample records the **true center coordinates** of the inserted target pattern as ground truth in `manifest.csv` (`target_center_x`, `target_center_y`).
+
+The generator models controlled semiconductor/SEM variations including:
+
+- geometric scale variation
+- rotation variation
+- feature-size variation (pitch preserved)
+- detector noise, independently drawn per image
+- gain / offset (contrast) drift
+- gamma response non-linearity
+- Gaussian beam blur
+- SEM edge brightening
+- local jitter and missing / weak features
+
+Ground truth is used only for **offline evaluation**. It is never supplied to the localization inference path.
+
+## 5. Repository Structure
+
+```text
+DRIFT-SENSE/
+├── README.md
+├── .gitignore
+├── LICENSE
+├── dataset_generator.py
+├── evaluation_script.py
+├── final_production_check.py
+├── dataset_visual_generator.py
+├── requirements.txt
+├── references.md
+├── benchmark.csv
+├── dataset/              # frozen 30-case benchmark (search / reference / metadata / manifest)
+├── test_input/           # demo reference.png + search.png used by the CLI defaults
+├── slide_success.png
+└── slide_failure.png
+```
+
+### File descriptions
+
+| File | Purpose |
+|---|---|
+| `README.md` | Complete setup and usage instructions |
+| `dataset_generator.py` | Generates synthetic reference/search image pairs and records ground truth |
+| `evaluation_script.py` | Official localization inference script (`--reference` + `--search` → `RESULT: (x, y)`) |
+| `final_production_check.py` | Runs the frozen 30-pair benchmark and reports accuracy / runtime / regressions |
+| `dataset_visual_generator.py` | Renders `slide_success.png` and `slide_failure.png` from the benchmark |
+| `requirements.txt` | Python dependencies required to reproduce the environment |
+| `references.md` | Supporting research and technical references |
+| `benchmark.csv` | Frozen baseline results for the 30-case benchmark |
+| `dataset/` | Frozen 30-case benchmark (do not regenerate) |
+| `test_input/` | Demo images used when no paths are passed to `evaluation_script.py` |
+| `slide_success.png` | Successful localization example |
+| `slide_failure.png` | Honest failure example |
+
+## 6. Requirements
+
+Recommended environment:
+
+- Python 3.10+
+- CPU-based execution
+- NumPy
+- OpenCV
+- Matplotlib (only for `dataset_visual_generator.py`)
+
+No GPU or deep-learning framework is required.
+
+No trained neural-network model is used.
+
+## 7. Installation
+
+Clone the repository:
+
+```bash
 git clone https://github.com/VEERU24EC006/DRIFT-SENSE.git
 cd DRIFT-SENSE
-python -m venv .venv
 ```
 
-Activate the virtual environment:
+Create a virtual environment.
 
-Windows PowerShell:
-```
-.venv\Scripts\Activate.ps1
-```
+### Windows PowerShell
 
-Linux/macOS:
-```
-source .venv/bin/activate
+```powershell
+python -m venv env
+.\env\Scripts\Activate.ps1
 ```
 
-Install dependencies:
-```
-pip install -r requirements.txt
-```
+### Linux / macOS
 
-## 1. Generate a dataset (reference + search pairs)
-
-```
-python dataset_generator.py --pairs 30 --output verify_data
+```bash
+python3 -m venv env
+source env/bin/activate
 ```
 
-Arguments:
+Install the exact dependencies:
 
-| Argument | Meaning |
-|---|---|
-| `--pairs N` (alias `--samples N`) | Number of image pairs to generate (minimum 30 recommended) |
-| `--output DIR` | Output directory (defaults to `dataset`) |
-| `--force` | Overwrite a non-empty output directory (deletes its contents) |
-
-Use a fresh directory (like `verify_data` above) so the shipped `dataset/` benchmark is never touched.
-
-For every pair the generator writes:
-
-```
-verify_data/
-  search/sample_000_search.png     # 1000x1000 field of view (the search image)
-  reference/sample_000_ref.png     # 1000x1000 reference pattern to find
-  metadata/sample_000_metadata.json
-  manifest.csv                     # true center per pair (ground truth)
-  manifest.json
+```bash
+python -m pip install --upgrade pip
+python -m pip install -r requirements.txt
 ```
 
-Ground truth for each pair is the `target_center_x` and `target_center_y` columns in `manifest.csv` — the exact parent-geometry center of the reference crop inside the search window.
+Verify the installation:
 
-Each generated pair combines: Gaussian beam blur, independent detector noise per image (search is noisier than reference), SEM edge brightening, contrast/gain and gamma drift, rotation in +/-2 deg, 10x scale reduction, feature-size variation, local jitter, and a small fraction of missing/weak contacts. Every choice is cited in `references.md`.
-
-## 2. Run localization inference
-
-`evaluation_script.py` takes a reference image and a search image and prints the predicted center of the reference pattern inside the search image.
-
-```
-python evaluation_script.py --reference test_input\reference.png --search test_input\search.png
+```bash
+python --version
+python -m pip freeze
 ```
 
-Output:
+## 8. Generate a Sample Dataset
 
+The dataset generator creates synthetic image pairs and records their ground-truth locations.
+
+```bash
+python dataset_generator.py --pairs 1 --output sample_data
 ```
+
+Arguments: `--samples N` / `--pairs N` (number of pairs, alias), `--output DIR` (output directory), `--force` (overwrite a non-empty output directory).
+
+This creates a structure similar to:
+
+```text
+sample_data/
+├── search/
+│   └── sample_000_search.png
+├── reference/
+│   └── sample_000_ref.png
+├── metadata/
+│   └── sample_000_metadata.json
+├── manifest.csv
+└── manifest.json
+```
+
+`manifest.csv` contains the true target center for every generated pair:
+
+```text
+sample_id,search,reference,target_center_x,target_center_y,...
+sample_000,search/sample_000_search.png,reference/sample_000_ref.png,452.4,263.2,...
+```
+
+### Important
+
+Ground-truth coordinates are generated for **evaluation only**. They are not passed to the inference algorithm.
+
+## 9. Run Localization
+
+The localization entry point is `evaluation_script.py`.
+
+It is run by providing:
+
+1. the path to the reference image
+2. the path to the search image
+
+Example:
+
+```bash
+python evaluation_script.py --reference sample_data/reference/sample_000_ref.png --search sample_data/search/sample_000_search.png
+```
+
+Expected output:
+
+```text
 RESULT: (452.0000, 263.0000)
 ```
 
-The `RESULT:` line is the coordinate to use. A `#` line below it shows the internal decision, ZNCC score, scale, rotation, feature-size factor, and runtime. Optional flags: `--beam_spot_nm` (evaluator-side beam blur) and `--output` (append a CSV row).
+The returned coordinates are in **Search Image pixel coordinates**.
 
-Running `python evaluation_script.py` with no arguments uses the same `test_input\reference.png` / `test_input\search.png` demo pair.
+Running with no arguments uses the demo pair in `test_input/`:
 
-## 3. Validate on the frozen benchmark
-
-The repo ships a frozen 30-pair benchmark (`dataset/` + `benchmark.csv`). Run the validator to reproduce the reported accuracy:
-
-```
-python final_production_check.py
+```bash
+python evaluation_script.py
 ```
 
-It runs the current `evaluation_script.py` on all 30 pairs and reports the error distribution, per-pair runtime, and whether results differ from the frozen baseline.
+### Inference requirements
 
-## 4. Generate the result visuals (success / failure)
+The inference script:
 
+- accepts the image paths as inputs
+- does not require ground truth
+- does not require source-code modification
+- does not require a trained model
+- automatically executes the production localization pipeline
+- returns the predicted center `(x, y)`
+
+**This is the script intended for external evaluation.**
+
+## 10. Direct Production Matcher
+
+`evaluation_script.py` is the underlying production implementation. Its command-line interface is:
+
+```text
+python evaluation_script.py --search SEARCH --reference REFERENCE [--beam_spot_nm BEAM_SPOT_NM] [--output OUTPUT]
 ```
-python dataset_visual_generator.py
+
+Optional arguments:
+
+```text
+--beam_spot_nm
 ```
 
-Randomly picks one success case (error <= 0.65 px) and one failure case (error > 5 px) from the frozen benchmark and saves two figures:
+allows beam-spot evaluation when required.
 
+```text
+--output
 ```
-slide_success.png   # reference + search + zoomed panel with predicted (green X) and true (red circle)
-slide_failure.png   # same layout plus a written reason for the failure
+
+writes the resulting evaluation information to a CSV file.
+
+## 11. Localization Pipeline
+
+The production implementation evaluates multiple hypotheses over:
+
+### Geometric scale
+
+```text
+0.08
+0.09
+0.10
+0.11
+0.12
 ```
 
-Options: `--seed N` for a reproducible pick, or `--success sample_000 --failure sample_010` to force specific samples.
+### Rotation
 
-## 5. Inspecting the generated images
+```text
+-2°
+-1°
+0°
++1°
++2°
+```
 
-Open any pair directly — the files are normal PNGs:
+### Feature size
 
-- `test_input\search.png` — the 1000x1000 field of view
-- `test_input\reference.png` — the 1000x1000 reference pattern
+```text
+0.50
+0.75
+1.00
+1.25
+1.50
+```
 
-Generated datasets follow the same layout under `verify_data\search\` and `verify_data\reference\`.
+This forms:
 
-To check a prediction against ground truth, run the inference on a pair and compare the `RESULT:` line with that sample's `target_center_x` / `target_center_y` row in `manifest.csv`. For the frozen benchmark the same check is done automatically by `final_production_check.py`.
+```text
+5 × 5 × 5 = 125 hypotheses
+```
 
-## Results (frozen 30-sample benchmark)
+For each valid hypothesis, DRIFT-SENSE:
 
-| Metric | Value |
+1. transforms the reference according to the hypothesis
+2. performs normalized cross-correlation
+3. extracts multiple strong peaks
+4. applies spatial suppression
+5. combines and deduplicates candidates
+6. retains a bounded candidate pool (48)
+7. performs 3×3 Regional Census structural verification on the top candidates
+8. selects the final candidate
+9. returns its center coordinates
+
+## 12. Why It Handles Periodic Layouts Better
+
+A basic approach would be:
+
+```text
+Reference
+   ↓
+NCC
+   ↓
+Highest peak
+   ↓
+(x, y)
+```
+
+This can fail in repetitive DRAM structures because multiple sites can have almost identical local appearance.
+
+DRIFT-SENSE instead uses:
+
+```text
+Reference + Search
+        ↓
+Multiple hypotheses
+        ↓
+Multiple NCC candidates
+        ↓
+Candidate pool
+        ↓
+Regional Census verification
+        ↓
+Final location
+```
+
+This allows a structurally incorrect but high-correlation candidate to be compared against other plausible candidates before final selection.
+
+## 13. Numerical Robustness
+
+During development, a pathological behavior in normalized correlation was identified.
+
+When a transformed reference became constant or effectively constant, normalized correlation could produce an artificial perfect response across the search map. These invalid peaks could enter the candidate pool and cause a completely incorrect result.
+
+The final production matcher therefore includes a **template-variance guard** that rejects degenerate hypotheses before normalized correlation.
+
+A second narrowly scoped protection handles pathological near-perfect adaptive NCC responses (returning the raw baseline coordinate instead).
+
+These changes were validated against the frozen benchmark and introduced:
+
+- no prediction regressions
+- no decision regressions
+- no new catastrophic regressions
+
+## 14. Evaluation Method
+
+For offline evaluation, the predicted center is compared with the generated ground-truth center.
+
+Euclidean localization error:
+
+```text
+error = sqrt((pred_x - GT_x)^2 + (pred_y - GT_y)^2)
+```
+
+The benchmark reports:
+
+- mean localization error
+- median localization error
+- worst-case error
+- pass rate within selected tolerances
+- runtime per image pair
+
+Ground truth is never used during inference.
+
+## 15. Final Benchmark
+
+The final locked production evaluator was tested on **30 image pairs**.
+
+| Metric | Result |
 |---|---|
-| Predictions <= 0.65 px of true center | 93.3% (28/30) |
-| Mean / median / worst error | 27.7 / 0.4 / 497.8 px |
-| Mean runtime per 1000x1000 pair | ~3.6 s (4 OpenCV threads, 4 worker threads) |
+| Test pairs | 30 |
+| Within 0.65 px | 93.3% |
+| Within 1 px | 93.3% |
+| Within 2 px | 93.3% |
+| Within 5 px | 93.3% |
+| Median error | 0.403 px |
+| Mean error | 27.687 px |
+| Worst-case error | 497.848 px |
+| Mean runtime | ~9.9 s / pair |
+| Median runtime | ~8.3 s / pair |
+| Worst runtime | ~16.1 s / pair |
 
-Two pre-existing failures (`sample_010`, `sample_025`) are highly repetitive layouts where a different lattice instance is visually indistinguishable from the true one; the matcher still returns a self-consistent periodic location.
+The mean error is dominated by a small number of catastrophic cases; the median error and pass rates better represent typical localization behavior. Reproduce these numbers with `final_production_check.py`.
 
-## Algorithm
+## 16. Known Failure Modes
 
-1. Build 125 transforms of the reference: 5 feature-size factors (morphological erode/dilate), 5 scales (0.08-0.12, covering the 10x resampling direction), 5 rotations (+/-2 deg).
-2. Skip zero-variance templates — OpenCV's `TM_CCOEFF_NORMED` returns an all-ones map for them, so they are excluded before matching.
-3. Run normalized cross-correlation per hypothesis in a 4-thread pool, take the top 8 peaks each, and spatially deduplicate into a 48-candidate pool.
-4. Re-score the top-20 pool candidates with a regional (3x3) Census transform; a candidate replaces the NCC winner only when it gains regionally, resolving periodic-lattice ambiguity.
-5. If the selected Adaptive candidate is a near-perfect (ZNCC >= 0.999999) match that also beats the RAW baseline — a pathological response under impulse noise — return the RAW baseline coordinate instead.
+DRIFT-SENSE is not presented as a universally perfect solution.
 
-## Repository layout
+A known failure mechanism is **periodic candidate ambiguity**.
 
+`sample_010` produced approximately:
+
+```text
+Ground truth: (684.67, 572.44)
+Prediction:   (907.00, 127.00)
+Error:        497.85 px
 ```
-dataset_generator.py      # synthetic DRAM-style dataset generator (writes GT)
-evaluation_script.py      # localization inference script (reference + search -> RESULT)
-final_production_check.py # frozen 30-sample benchmark validator
-dataset_visual_generator.py # success/failure figure generator
-benchmark.csv             # frozen baseline results
-dataset/                  # frozen 30-case benchmark (do not regenerate)
-references.md             # citations for every noise/augmentation choice
-requirements.txt
-README.md
+
+The true candidate existed close to the correct location, but another repeated structure received a stronger score during candidate selection.
+
+This limitation is intentionally documented rather than hidden.
+
+Additional external stress testing showed sensitivity to severe:
+
+- radial distortion
+- row jitter
+- geometric distortion
+- highly repetitive ambiguity
+
+These are known research limitations of the current locked build.
+
+## 17. Technology Stack
+
+The software prototype uses:
+
+- Python
+- NumPy
+- OpenCV
+- Matplotlib (visualization only)
+- standard Python utilities
+
+The final system is classical computer vision and does not use a deep-learning model.
+
+## 18. Hardware Implementation Direction
+
+The current repository contains the validated **software reference implementation**.
+
+The intended future acceleration path is:
+
+```text
+Software Algorithm
+       ↓
+Dataflow Decomposition
+       ↓
+DMA / AXI4-Stream
+       ↓
+BRAM Line Buffers
+       ↓
+DSP / MAC Acceleration
+       ↓
+srv32 RISC-V Control
+       ↓
+CLIC Interrupt Handling
 ```
 
-## References
+This hardware direction is separate from the Python runtime and is intended as a future implementation/acceleration path after algorithmic validation.
 
-All noise, degradation, and matching-method choices are justified in `references.md`.
+## 19. References
+
+Technical and scientific references used for the project are listed in:
+
+```text
+references.md
+```
+
+These include references covering:
+
+- normalized cross-correlation
+- Census transform
+- image registration
+- SEM imaging effects
+- semiconductor inspection considerations
+- noise and acquisition effects
+
+## 20. Reproducibility
+
+For reproducible experiments:
+
+1. Use the Python environment described by `requirements.txt`.
+2. Generate a fresh synthetic pair using `dataset_generator.py`.
+3. Run `evaluation_script.py` using only the reference and search image paths.
+4. Record the predicted `(x, y)`.
+5. Compare against ground truth only during offline evaluation.
+
+Do not pass ground-truth coordinates to the inference script.
+
+## 21. Project Status
+
+**DRIFT-SENSE submission build: FINAL / LOCKED**
+
+The final system:
+
+- targets DRAM-style periodic layouts
+- handles scale, rotation and feature-size variation
+- retains multiple localization candidates
+- uses Regional Census structural verification
+- includes protection against degenerate normalized-correlation cases
+- was regression-tested on the frozen benchmark
+- provides a standalone inference path
+- provides a synthetic dataset generator
+- provides a reproducible software implementation
+- provides a future path toward hardware acceleration
+
+For external scoring, **use `evaluation_script.py` as the official localization entry point**.
+
+## Quick Start
+
+After installation:
+
+```bash
+python dataset_generator.py --pairs 1 --output sample_data
+```
+
+Then:
+
+```bash
+python evaluation_script.py --reference sample_data/reference/sample_000_ref.png --search sample_data/search/sample_000_search.png
+```
+
+Expected result:
+
+```text
+RESULT: (x, y)
+```
+
+No source-code modification or ground-truth input is required.
