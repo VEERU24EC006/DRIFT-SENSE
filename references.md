@@ -76,6 +76,32 @@ references appear in the competition slide deck (Slide 9).
     scaled critical dimensions) used for the DRAM-style (word lines / bit
     lines / contacts) synthetic parent, mirroring real periodic device arrays.
 
+## F. Controlled Severity Testing
+
+The generator exposes degradation severity as explicit parameters rather than applying fixed augmentation strength. This allows localization robustness to be evaluated across increasing noise and imaging severity.
+
+In particular, the project evaluates:
+
+- Poisson/detector noise severity
+- multiplicative speckle noise sigma
+- salt-and-pepper corruption probability
+- charging severity
+- beam-related severity
+- raster/row-jitter severity
+- geometric distortion severity
+
+Severity sweeps were used to determine whether a degradation actually changed localization accuracy before introducing any production correction. Parameters that reduced similarity scores but did not degrade localization were intentionally left unmodified.
+
+## G. Ground-Truth and Evaluation Methodology
+
+Ground-truth coordinates are generated automatically from the known insertion location of each synthetic reference pattern. They are used only for offline evaluation.
+
+For each prediction, Euclidean localization error is computed as:
+
+`error = sqrt((pred_x - GT_x)^2 + (pred_y - GT_y)^2)`
+
+Reported metrics include mean, median, worst-case error, and pass rates at 0.65 px, 1 px, 2 px, and 5 px.
+
 ---
 
 ## Mapping table (generator stages -> citations)
