@@ -79,6 +79,20 @@ The generator models controlled semiconductor/SEM variations including:
 - Gaussian beam blur
 - SEM edge brightening
 - local jitter and missing / weak features
+- Linewidth/CD bias (nm)
+- Corner rounding (px)
+- Beam astigmatism ratio
+- Barrel(+)/pincushion(-) distortion
+- Gamma (contrast curve)
+- Speckle noise sigma (multiplicative)
+- Salt-and-pepper probability
+
+
+
+
+
+
+
 
 Ground truth is used only for **offline evaluation**. It is never supplied to the localization inference path.
 
@@ -203,6 +217,59 @@ sample_id,search,reference,target_center_x,target_center_y,...
 sample_000,search/sample_000_search.png,reference/sample_000_ref.png,452.4,263.2,...
 ```
 
+Frozen Benchmark Verification
+
+'''text final_production_check.py
+'''
+provides the final reproducibility check for the locked production implementation.
+
+Run:
+
+'''textpython final_production_check.py
+'''
+
+The script runs the locked matcher on the frozen 30-pair benchmark stored in dataset/ and reports:
+
+Mean, median, and worst-case localization error
+Pass rate within 0.65 px, 1 px, 2 px, and 5 px
+Per-pair and aggregate runtime
+Prediction differences against benchmark.csv
+Decision differences against benchmark.csv
+Detection of new catastrophic regressions
+
+This reproduces the benchmark results reported in Section 15 and verifies that the locked production implementation has not changed its validated behavior.
+
+Submission Visual Generation
+
+'''text
+dataset_visual_generator.py 
+'''
+generates the two visual examples used in the submission.
+
+Run:
+
+'''text
+python dataset_visual_generator.py
+'''
+
+The script selects:
+
+one success case with localization error ≤ 0.65 px
+one honest failure case with error > 5 px
+
+It runs the production matcher and renders:
+
+slide_success.png
+slide_failure.png
+
+Each figure contains three panels:
+
+Reference image
+Full Search image with the predicted location and true location
+Zoomed target region
+
+The failure visualization also reports the diagnosed failure mechanism, such as periodic-lattice lock-on.
+
 ### Important
 
 Ground-truth coordinates are generated for **evaluation only**. They are not passed to the inference algorithm.
@@ -220,6 +287,8 @@ Example:
 
 ```bash
 python evaluation_script.py --reference sample_data/reference/sample_000_ref.png --search sample_data/search/sample_000_search.png
+( or can change name to search.png or reference.png for convenience)
+
 ```
 
 Expected output:
@@ -310,6 +379,11 @@ This forms:
 ```text
 5 × 5 × 5 = 125 hypotheses
 ```
+Controlled Noise and Severity Testing
+
+The dataset was evaluated not only under nominal conditions but also across controlled noise and imaging severity levels. This includes dose/Poisson noise, multiplicative speckle noise, and probabilistic salt-and-pepper corruption, along with charging, beam and raster-related effects.
+
+Severity sweeps were used to determine whether a parameter actually caused localization degradation, rather than optimizing only the correlation score. This prevented unnecessary preprocessing from being added when image quality decreased but localization remained stable.
 
 For each valid hypothesis, DRIFT-SENSE:
 
@@ -372,6 +446,39 @@ These changes were validated against the frozen benchmark and introduced:
 - no prediction regressions
 - no decision regressions
 - no new catastrophic regressions
+
+Observed Pathologies and Targeted Fixes
+
+Two important NCC pathology mechanisms were identified through forensic testing.
+
+Zero-variance template pathology
+
+Some feature-size hypotheses became completely constant. OpenCV TM_CCOEFF_NORMED could then produce an artificial 1.0 response across the entire search image, creating arbitrary false peaks and poisoning the candidate pool.
+
+The production matcher now performs a template-variance check before NCC and skips degenerate hypotheses.
+
+Near-constant template / salt-and-pepper pathology
+
+A separate failure was observed with severe salt-and-pepper corruption. Some transformed templates became numerically near-constant rather than exactly zero-variance, producing pathological near-perfect NCC responses.
+
+The production build therefore contains a narrow safety gate for pathological near-perfect Adaptive NCC responses, preventing such a response from incorrectly overriding a valid RAW localization.
+
+These protections were validated against the frozen 30-case benchmark with:
+
+0 prediction regressions
+0 decision regressions
+0 new catastrophic regressions
+
+External Noise Validation
+
+Additional external testing was performed on independently generated speckle cases and original pathological examples.
+
+The analysis distinguished two different failure mechanisms:
+
+Speckle/noise-related NCC pathology, which was mitigated by the final numerical safeguards.
+True periodic-layout ambiguity, where a valid but incorrect repeated structure can still outrank the correct candidate.
+
+Therefore, noise-pathology failures should not be confused with the remaining periodic-layout limitation.
 
 ## 14. Evaluation Method
 
@@ -439,6 +546,19 @@ Additional external stress testing showed sensitivity to severe:
 - highly repetitive ambiguity
 
 These are known research limitations of the current locked build.
+
+Known Failure Modes Clarification
+
+The current build has already mitigated the identified zero-variance and pathological near-perfect NCC failures associated with extreme noise cases.
+
+The remaining known limitations are primarily:
+
+Severe barrel/pincushion distortion
+Severe row jitter
+Strong geometric deformation
+Periodic candidate ambiguity where a false repeated structure receives a stronger overall score
+
+These remain honest limitations of the locked implementation and were not addressed with unvalidated last-minute algorithmic changes.
 
 ## 17. Technology Stack
 
@@ -543,5 +663,22 @@ Expected result:
 ```text
 RESULT: (x, y)
 ```
+
+For external scoring, run:
+
+python evaluation_script.py --reference <reference_image> --search <search_image>
+
+The script performs inference without ground truth and prints:
+
+RESULT: (x, y)
+
+For benchmark validation, use:
+
+python final_production_check.py
+
+For submission visualization, use:
+
+python dataset_visual_generator.py
+
 
 No source-code modification or ground-truth input is required.
