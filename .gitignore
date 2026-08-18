@@ -1,0 +1,16 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+
+# Virtual environments
+env/
+.venv/
+
+# Legacy / diagnostic scratch (not part of the competition deliverable)
+datasetv1/
+test_output/
+
+# OS
+Thumbs.db
+.DS_Store

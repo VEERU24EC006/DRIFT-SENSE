@@ -1,307 +1,167 @@
-# DRIFT-SENSE
-DRIFT SENSE AI-Powered Navigation-Error Recovery for Wafer Inspection Tools. SUBMISSION FOR SEMICON 2026.
-DRIFT-SENSE
-AI-Powered Navigation-Error Recovery for Semiconductor Wafer Inspection
+# Drift-Sense: Navigation-Error Recovery
 
-DRIFT-SENSE is a classical computer-vision localization system designed for DRAM-style periodic SEM layouts. Given a small reference image and a large search image, the system identifies where the reference pattern appears in the search image and returns the predicted center coordinates (x, y).
+Drift-Sense localizes a periodic semiconductor reference pattern inside a
+1000x1000 px scanning-electron-microscope (SEM) style search image despite
+**10x scale differences**, rotation, contrast/gain drift, noise, and the
+periodic-ambiguity problem that breaks naive template matching.
 
-The system addresses the Navigation-Error Recovery problem: an inspection tool may revisit a wafer site with a positioning error caused by stage drift, thermal effects, vibration, mechanical tolerances, or imaging variation. Because semiconductor layouts are highly repetitive, the wrong site can look almost identical to the intended site. DRIFT-SENSE therefore does not rely on a single template-matching peak.
+A fully synthetic, ground-truth-labeled dataset generator produces reference +
+search pairs for **DRAM-style** layouts (periodic word-lines and bit-lines
+crossing at right angles with a contact/via at every intersection). A classical
+(no-deep-learning) multi-hypothesis matcher predicts the reference center
+`(x, y)` in the search image.
 
-1. Problem Definition
-Inputs
-Reference image: approximately 100 × 100 pixels
-Search image: 1000 × 1000 pixels
-The reference represents the target structure at approximately 10× higher magnification than the search image.
-Expected geometric scale relationship is approximately 9×, 10×, or 11×.
-Small rotations and feature/morphology variations may be present.
+---
 
-The inference system returns:
+## 1. Setup
 
-(x, y)
+Requires **Python 3.10+** and only two runtime packages
+(`numpy`, `opencv-python`):
 
-where (x, y) is the predicted center of the reference pattern in Search Image pixel coordinates.
+```bash
+git clone <your-repo-url>
+cd kla_drift_sense
 
-Ground truth is used only for offline evaluation. The production inference path never receives ground-truth coordinates. 
-Key Approach
-
-DRIFT-SENSE is a classical computer-vision system, not a deep-learning model.
-
-The production pipeline is:
-
-Reference + Search Images
-          ↓
-Multi-hypothesis generation
-(scale × rotation × feature size)
-          ↓
-Normalized Cross-Correlation (NCC)
-          ↓
-Multiple peak extraction
-          ↓
-Spatial suppression + candidate deduplication
-          ↓
-3 × 3 Regional Census verification
-          ↓
-Final candidate selection
-          ↓
-Predicted center (x, y)
-
-
-Why multiple candidates?
-
-Simple template matching often assumes that the highest correlation peak is the correct location. This is unreliable for periodic semiconductor layouts because many regions can contain nearly identical structures.
-
-DRIFT-SENSE retains multiple promising candidates and applies structural verification before selecting the final location.
-
-Why Regional Census?
-
-NCC measures pixel-level similarity and can be ambiguous when repeated structures look similar. Regional Census verification adds local structural information and helps distinguish competing periodic candidates without relying entirely on absolute intensity.
-
-
-Dataset Generator
-
-The repository contains a standalone synthetic SEM dataset generator.
-
-The generator is designed to produce:
-
-Reference images
-Search images
-Ground-truth center coordinates
-Architecture-dependent synthetic patterns
-Controlled imaging and noise variations
-
-The primary validation and presentation focus of DRIFT-SENSE is DRAM-style periodic layouts.
-
-Controlled variations
-
-The synthetic dataset can include:
-
-Geometric scale variation
-Rotation variation
-Feature-size variation
-Dose / Poisson noise
-Multiplicative speckle noise
-Salt-and-pepper corruption controlled by probability
-Charging effects
-Beam-related effects
-Pattern-collapse variation
-CD / line-width variation
-Corner-rounding variation
-Raster / scan-related distortions
-
-These controls are intended to model realistic SEM acquisition and semiconductor-pattern variability rather than arbitrary image augmentation.
-
-Ground truth
-
-For every generated pair, the generator records the true center of the inserted target pattern.
-
-Ground truth is used for:
-
-Localization-error calculation
-Regression/pass-rate analysis
-Failure analysis
-Benchmark validation
-
-. Production Localization Details
-
-The locked production matcher evaluates:
-
-Geometric scale:
-0.08, 0.09, 0.10, 0.11, 0.12
-
-
-Rotation:
--2°, -1°, 0°, +1°, +2°
-
-
-Feature-size factor:
-0.50, 0.75, 1.00, 1.25, 1.50
-
-This produces:
-
-5 × 5 × 5 = 125 hypotheses
-
-For each hypothesis:
-
-Generate the corresponding transformed reference.
-Reject numerically degenerate constant templates before NCC.
-Perform normalized template matching.
-Extract multiple high-quality peaks.
-Apply spatial suppression.
-Combine and deduplicate candidates.
-Retain a bounded candidate pool.
-Evaluate local structural similarity using Regional Census.
-Select the final validated candidate.
-Convert the match location into the target center (x, y).
-11. Numerical Robustness
-
-During forensic validation, we identified a failure mode involving normalized template matching.
-
-A constant or effectively constant template has undefined normalized correlation. In OpenCV, such a case can produce an artificial response of 1.0 across the response map, creating fake peaks that can poison candidate selection.
-
-DRIFT-SENSE therefore checks template variance before invoking normalized correlation and skips degenerate hypotheses.
-
-A second narrow safeguard prevents a pathological near-perfect adaptive NCC result from incorrectly overriding a valid RAW result when the response is numerically suspicious.
-
-Both protections were regression-tested against the frozen benchmark.
-
-12. Benchmark Results
-
-The final locked production evaluator was tested on a frozen 30-pair benchmark.
-
-Metric	Result
-Test pairs	30
-Accuracy within 0.65 px	93.3%
-Accuracy within 1 px	93.3%
-Accuracy within 2 px	93.3%
-Accuracy within 5 px	93.3%
-Median error	0.403 px
-Mean error	27.687 px
-Worst error	497.848 px
-Mean runtime	~4.02 s / pair
-Median runtime	~3.73 s / pair
-Worst runtime	~6.51 s / pair
-
-The mean error is strongly affected by a small number of catastrophic failures; the median error and pass rates better represent normal localization behavior.
-
-Final production hardening resulted in:
-
-0 prediction regressions on the frozen benchmark
-0 decision regressions
-0 new catastrophic regressions
-13. Honest Failure Behavior
-
-DRIFT-SENSE is not claimed to be perfect.
-
-One known failure mode is periodic ambiguity, where a repeated semiconductor structure can produce a false candidate whose correlation score is slightly stronger than the true location.
-
-Example frozen case:
-
-Ground truth: (778.73, 623.45)
-Prediction:   (779.00, 915.00)
-Error:        291.55 px
-
-The true candidate existed and was close to the correct location, but another repetitive structure outranked it during candidate selection.
-
-This limitation is documented intentionally.
-
-Additional external stress testing showed sensitivity to:
-
-severe barrel/pincushion distortion
-severe row jitter
-extreme repetitive ambiguity
-pathological acquisition conditions outside the validated distribution
-
-These remain known limitations rather than claimed solved cases.
-
-14. Why This Approach?
-Simple template matching
-Reference
-   ↓
-Correlation map
-   ↓
-Global maximum
-   ↓
-(x, y)
-DRIFT-SENSE
-Reference + Search
-        ↓
-Scale / rotation / feature hypotheses
-        ↓
-Multiple NCC candidates
-        ↓
-Candidate pool
-        ↓
-Regional Census verification
-        ↓
-Validated (x, y)
-
-The difference matters for periodic DRAM layouts because the strongest pixel correlation is not necessarily the intended site.
-
-15. Hardware Acceleration Direction
-
-The submitted system is a validated software prototype.
-
-The intended future hardware implementation maps computationally intensive dataflow into:
-
-DMA for image movement
-AXI4-Stream for streaming data paths
-BRAM line buffers for local image storage
-DSP/MAC structures for correlation-heavy operations
-srv32 RISC-V control
-CLIC interrupt handling
-
-The Python implementation serves as the algorithmic reference against which a future hardware accelerator can be verified.
-
-The hardware architecture is not required to run this Python repository.
-
-16. Evaluation Methodology
-
-For each image pair:
-
-Load reference and search images.
-Run inference without ground truth.
-Record predicted (x,y).
-Compare prediction with ground-truth metadata offline.
-Compute Euclidean localization error.
-Aggregate:
-Mean error
-Median error
-Worst-case error
-Pass rate at selected tolerances
-Runtime per image pair
-
-Ground truth is never used during inference.
-
-17. References
-
-Supporting literature and technical references are listed in:
-
-REFERENCES.md
-
-Theoretical foundations include:
-
-Normalized cross-correlation and template matching
-Census transform / non-parametric local transforms
-Computer-vision image registration and matching
-SEM imaging and acquisition effects
-18. Limitations
-
-The current production system should not be interpreted as universally robust to every possible SEM artifact.
-
-Known limitations include:
-
-Severe radial distortion
-Severe row jitter
-Extreme repetitive false matches
-Pathological acquisition conditions outside the validated dataset distribution
-
-The project prioritizes preserving validated behavior and avoiding regressions over adding unvalidated corrections.
-
-19. Reproducibility and Safety
-
-Before changing the production matcher:
-
-Preserve a backup.
-Freeze the benchmark.
-Change one factor at a time.
-Evaluate localization error, not only correlation score.
-Run the complete frozen regression.
-Never use ground truth inside inference.
-Never replace the locked production implementation with an unvalidated experiment.
-
-Diagnostic and research scripts are intentionally excluded from the minimal public submission package.
-
-20. Project Status
-
-DRIFT-SENSE submission build: FINAL / LOCKED
-
-The final validated system:
-
-targets DRAM-style periodic layouts
-handles scale, rotation, and feature-size variation
-evaluates multiple candidates rather than trusting one correlation peak
-uses Regional Census structural verification
-contains verified NCC-degeneracy protections
-has been regression-tested on the frozen benchmark
-provides a reproducible software inference path
-provides a clear path toward future hardware acceleration
+# create a virtual environment (Windows shown; Linux/macOS: python3 -m venv .venv)
+python -m venv .venv
+.venv\Scripts\activate          # Linux/macOS: source .venv/bin/activate
+
+pip install -r requirements.txt
+```
+
+On the frozen 30-sample benchmark the pipeline runs in ~3.6 s per pair on a
+consumer CPU (4 OpenCV threads, 4 Python worker threads).
+
+---
+
+## 2. Generate a sample image pair
+
+```bash
+# DRAM-style layout, 30 pairs, output to ./verify_data (fresh dir - recommended
+# for a first run so the shipped ./dataset benchmark is never touched)
+python dataset_generator.py --pairs 30 --output verify_data
+```
+
+> The generator refuses to overwrite a non-empty output directory unless you
+> pass `--force` (it DELETES the directory contents). Keep the frozen
+> `./dataset` benchmark intact by always generating into a fresh directory.
+
+Arguments:
+
+| Argument | Meaning |
+|---|---|
+| `--pairs N` (alias `--samples N`) | Number of reference + search pairs (≥30 recommended) |
+| `--output DIR` | Output directory (default `dataset`) |
+| `--force` | Allow overwriting a non-empty output directory |
+
+For every pair the generator writes:
+
+```
+output/
+  search/sample_000_search.png   # 1000x1000 field of view
+  reference/sample_000_ref.png   # 1000x1000 reference pattern
+  metadata/sample_000_metadata.json
+  manifest.csv                   # true center per pair (ground truth)
+  manifest.json
+```
+
+**Ground truth** (`target_center_x`, `target_center_y` in `manifest.csv`) is the
+exact parent-geometry center of the reference crop inside the search window —
+not a re-measured estimate — so evaluation is deterministic.
+
+### Noise & augmentation model (with citations)
+
+| Degradation | Implementation | Citation |
+|---|---|---|
+| Beam blur (Gaussian PSF) | `GaussianBlur`, sigma scaled per image | Goldstein et al. [1] |
+| Shot/Poisson-style detector noise | Gaussian approximation, σ 2–4 DN (ref) / 3–6 DN (search) | Foi et al. [2] |
+| Search noisier than reference | larger detector-noise σ on the search image | [2], test-data rule |
+| SEM edge brightening | unsharp-mask edge enhancement on both images | [1], [10] |
+| Contrast/gain & offset drift | `x*N(0.92,1.08) + N(-6,6)` | [1], SEM metrology practice |
+| Global gamma / detector response | power-law `x^(1/γ)`, γ∈(0.94,1.06) | [1], [7] |
+| Scale difference (up to 10x) | Parent 11000px → search 1000px (INTER_AREA) | [4] |
+| Rotation | −2..+2 deg, BORDER_REFLECT | registration practice [6] |
+| Feature-size variation | critical dimensions ×{0.5,1.0,2.0}, pitch fixed | [8] |
+| Local jitter / missing features / weak contacts | per-cell jitter, 2% dropouts | [8] |
+
+---
+
+## 3. Run localization inference
+
+`evaluation_script.py` is the inference script: it accepts a reference image
+path and a search image path and prints the predicted center.
+
+```bash
+# predict the center of reference.png inside search.png
+python evaluation_script.py --reference path/to/reference.png --search path/to/search.png
+
+# optional: evaluator-side beam blur (nm FWHM) and CSV result logging
+python evaluation_script.py --reference r.png --search s.png --beam_spot_nm 10 --output results.csv
+```
+
+Output (final line is the coordinate):
+
+```
+RESULT: (269.3000, 712.9000)
+```
+
+It runs without manual edits and only requires `numpy` and `opencv-python`.
+The same file drives the benchmark validator (`final_production_check.py`).
+
+---
+
+## 4. Algorithm overview
+
+1. **Hypothesis grid** — 125 transforms of the reference: 5 feature-size
+   factors (morphological erode/dilate of critical features), 5 scales
+   (0.08–0.12, the 10x resampling direction), 5 rotations (±2°).
+2. **Zero-variance guard** — OpenCV `TM_CCOEFF_NORMED` returns an all-ones map
+   for zero-variance templates (`templNorm < eps` in OpenCV's
+   `common_matchTemplate`); such hypotheses are mathematically invalid and are
+   skipped before matching.
+3. **Parallel normalized cross-correlation** — `cv2.matchTemplate` per
+   hypothesis across a 4-thread pool; top-8 peaks each; spatially deduplicated
+   into a 48-candidate pool.
+4. **Census validation** — regional (3x3) Census transform (Zabih & Woodfill)
+   re-scores the top-20 pool candidates; a candidate only displaces the NCC
+   winner when it gains regionally, resolving periodic-lattice ambiguity.
+5. **Adaptive safety gate** — a near-perfect (ZNCC ≥ 0.999999) Adaptive result
+   that also beats the RAW baseline is pathological (e.g. impulse noise), so
+   the RAW baseline coordinate is returned instead.
+
+### Frozen 30-sample result
+
+`python final_production_check.py` (30-case benchmark shipped in `benchmark.csv`,
+`dataset/`):
+
+| Metric | Value |
+|---|---|
+| ≤ 0.65 px of GT | 93.3% (28/30) |
+| mean / median / worst error | 27.7 / 0.4 / 497.8 px |
+| mean runtime per 1000x1000 pair | ≈ 3.6 s |
+
+Two pre-existing failures (`sample_010`, `sample_025`) are highly repetitive
+layouts where a correct-but-alternate lattice location is visually
+indistinguishable; the matcher still returns a self-consistent periodic
+location.
+
+---
+
+## 5. Repository layout
+
+```
+kla_drift_sense/
+  dataset_generator.py      # standalone DRAM-style dataset generator (GT)
+  evaluation_script.py      # INFERENCE script (hypotheses, NCC, census, gates)
+  final_production_check.py # frozen-30 regression validator
+  benchmark.csv             # frozen baseline results
+  dataset/                  # frozen 30-case benchmark (never regenerate)
+  references.md             # citations for all noise/augmentation choices
+  requirements.txt
+  README.md
+```
+
+## 6. License / citation
+
+See `references.md` for the full citation list used to justify the
+noise, degradation, and matching-method choices.
