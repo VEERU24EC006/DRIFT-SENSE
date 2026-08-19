@@ -147,6 +147,9 @@ No GPU or deep-learning framework is required.
 
 No trained neural-network model is used.
 
+## DEMO VIDEO OF INSTALLATION AND WORKING.
+ [Watch DRIFT-SENSE Demo Video](https://drive.google.com/file/d/1_WCFEr1Kw4vZv3l9-80eUcJbz-qbys8w/view?usp=sharing)
+
 ## 7. Installation
 
 Clone the repository:
